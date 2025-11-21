@@ -71,4 +71,8 @@ The payment integration supports:
   * Stores booking records with current status (e.g., PENDING, CONFIRMED, COMPLETED, CANCELLED)
   * Stores payment transactions and their lifecycle states (INITIATED,CREATED, APPROVED, PENDING, AUTHORIZED, CAPTURED, COMPLETED, FAILED, CANCELLED, REFUNDED, PARTIALLY_REFUNDED, EXPIRED)
   * Stores refund requests and results
-  * Ensures consistency between booking lifecycle and payment lifecycle
+  * Ensures consistency between booking lifecycle and payment lifecycle.
+
+* **Redis (Caching Layer)**
+
+  * Cache access tokens & expiry for PayPal API calls.
