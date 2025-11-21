@@ -73,6 +73,6 @@ The payment integration supports:
   * Stores refund requests and results
   * Ensures consistency between booking lifecycle and payment lifecycle.
 
-* **Redis (Caching Layer)**
+* **Cache Layer (Redis)**
 
   * Cache access tokens & expiry for PayPal API calls.
