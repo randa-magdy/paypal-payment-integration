@@ -98,7 +98,7 @@ flowchart TB
     H --> I{"User Action?"}
     I -- Approve --> O{"Payment Intent?"}
     I -- Abandon/Timeout --> L1["DB: Update transaction=ABANDONED"]
-    L1 --> M1["DB: Booking status=PAYMENT_TIMEOUT"]
+    L1 --> M1["DB: Booking status=CANCELLED"]
     M1 --> N1["Notify User: Payment not completed"]
     O -- CAPTURE --> PC["Frontend returns to successUrl (Processing screen)"]
     PC --> PFE["PayPal sends 'CHECKOUT.ORDER.APPROVED' webhook"]
