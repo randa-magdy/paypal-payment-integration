@@ -323,3 +323,135 @@ sequenceDiagram
     BE->>FE: Push Notification "Payment Failed"
 ```
 ---
+
+### **3. Payment Authorized but Not Captured (Delayed Capture)**
+
+**Goal:** To authorize a user's funds without immediately capturing them, allowing for capture at a later date while holding the amount on the user’s account.
+
+**Precondition:** The merchant’s business model requires an authorization hold first (e.g., hotel booking).
+
+**Detailed Flow:**
+
+1. The user clicks the **“Pay with PayPal”** button on the checkout page.
+2. The frontend application sends a request to the backend API endpoint `POST /api/payments/process`, containing the (`bookingId`, `bookingType`, `amount`, `currency`, `customerId`, `provider`, `paymentMethodId`).
+3. The backend server updates the **Booking** status to `PENDING` and creates a new **Transaction** record with a status of `INITIATED`.
+4. The backend authenticates with PayPal by calling `POST /v1/oauth2/token` using the merchant's Client ID and Secret to obtain an `access_token`.
+5. The backend stores the `access_token` in Redis.
+6.  **Critical Difference:** Using this `access_token` , The backend calls `POST /v2/checkout/orders` with `intent: "AUTHORIZE"` including `amount`, `currency`, and `redirect_urls`.
+7. PayPal responds with a `201 Created` status, a PayPal `order_id`, and an `approval_url`.
+8.  The backend stores this `order_id` and `approval_url` against the Transaction record.
+9.  The backend responds to the frontend with the `approval_url`, and the frontend redirects the user's browser to it.
+10. The user logs into PayPal and confirms the payment on PayPal's page.
+11. Upon approval, PayPal redirects the user's browser back to the configured `returnUrl` (e.g., `https://example.com/payment/success`) along with the `order_id`.
+12. **In parallel**, The PayPal sends an asynchronous `CHECKOUT.ORDER.APPROVED` webhook event to the backend’s 
+webhook listener (`POST /api/webhooks/paypal`).
+13. The backend receives the webhook, verifies its cryptographic signature to confirm it’s from PayPal, and updates the **Transaction** status to `APPROVED`.
+14. Backend uses stored `order_id` (from the Transaction record) and `access_token` (from Redis) to call `POST /v2/checkout/orders/{order_id}/authorize`
+* At this point, the payment amount is **held/reserved** on the user’s account (funds are not yet captured, but unavailable for other transactions).
+* PayPal returns `authorization_id` and status.
+15. Backend updates the **Transaction** status to `AUTHORIZED` and **Booking** status to `CONFIRMED`.
+16. **In parallel**, The PayPal sends an asynchronous `PAYMENT.AUTHORIZATION.CREATED` webhook event to the backend’s webhook listener (`POST /api/webhooks/paypal`).
+17. The backend receives the webhook, verifies its cryptographic signature to confirm it’s from PayPal, reconciles the Transaction and Booking.
+
+18. **Later Capture:** When the merchant decides to capture the funds (e.g., after service delivery), backend calls `POST /v2/payments/authorizations/{authorization_id}/capture`
+
+* PayPal captures the held funds and responds with capture details.
+
+19. PayPal sends a `PAYMENT.CAPTURE.COMPLETED` webhook.
+
+* Backend updates **Transaction** to status `COMPLETED`.
+* 19. The frontend, now on the `returnUrl`, polls the backend or receives a push notification. Upon detecting the `CONFIRMED` status for the Booking & `COMPLETED` status for the Transaction, it displays a booking confirmation page.
+
+20. **Expiry Handling:** If capture is **not performed within \~29 days**, PayPal voids the authorization and sends a `PAYMENT.AUTHORIZATION.VOIDED` webhook.
+
+* Backend updates **Transaction** status to `EXPIRED` and **Booking** status to `CANCELLED`.
+* Backend sends a push notification to the user’s device "Booking cancelled"
+
+**Postcondition:**
+
+* Transaction = `AUTHORIZED`, `COMPLETED`, or `EXPIRED` depending on capture.
+* Booking = `CONFIRMED`, or `CANCELLED`.
+* Amount may be held in the user’s account until capture or expiry.
+
+**Sequence diagram:**
+
+```mermaid
+sequenceDiagram
+    participant FE as Frontend
+    participant BE as Backend
+    participant PP as PayPal
+    participant DB as Database
+    participant CH as Cache
+    Note over FE: User clicks "Pay with PayPal"
+    %% Phase 1: Payment Request
+    FE->>+BE: POST /api/payments/process<br/>{bookingId: "123", provider: "paypal"}
+    BE->>+DB: Update booking {status: "PENDING"}
+    BE->>+DB: Create transaction {status: "INITIATED", amount: 150 , currency: 'USD'}
+    DB->>-BE: Transaction created , booking updated
+    BE->>+PP: POST /v1/oauth2/token
+    PP->>-BE: Return access_token
+    BE->>+CH: Store access_token
+    BE->>+PP: POST /v2/checkout/orders {intent: "CAPTURE"}
+    PP->>-BE: Return {order_id, approval_url}
+    BE->>+DB: Update transaction {order_id: "order_789", status:"CREATED"}
+    DB->>-BE: Transaction updated
+    BE->>-FE: {order_id, approval_url}
+    %% Phase 2: User Approval
+    FE->>PP: Redirect user to approval_url
+    PP->>PP: User login & approve
+    PP->>FE: Redirect successUrl?token=xxx&order_id=order_789
+
+    %% Phase 2.5: Webhook-driven Authorization
+    PP->>+BE: POST /api/webhooks/paypal<br/>CHECKOUT.ORDER.APPROVED
+    BE->>+PP: Verify webhook signature
+    PP->>-BE: Verified
+    BE->>+DB: update transaction {status: "APPROVED"}
+    DB->>-BE: Transaction updated
+    BE->>+CH: Get access_token
+    CH->>-BE: Return access_token
+    BE->>+PP: POST /v2/checkout/orders/{orderId}/authorize
+    Note over PP: payment amount "held/reserved" on the user’s account
+    PP->>-BE: Return authorize details {authorization_id, status: "AUTHORIZED"}
+    
+    BE->>+DB: Update transaction {status: "AUTHORIZED", auth_id}
+    DB->>-BE: Transaction Updated
+    BE->>+DB: Update booking {status: "CONFIRMED"}
+    DB->>-BE: Booking Updated
+    
+    %% Webhook AUTHORIZED
+    PP->>+BE: POST /payments/webhook/paypal<br/>PAYMENT.AUTHORIZATION.CREATED
+    BE->>+PP: Verify webhook signature
+    PP->>-BE: Verified
+    BE->>+DB: Confirm transaction "AUTHORIZED"
+    DB->>-BE: Transaction confirmed
+    BE->>-FE: Push Notification "Booking confirmed"
+
+
+   Note over BE,PP: Capture is requested later (e.g. check-in date)
+   %% Later Capture by Merchant
+    alt Merchant Captures in Time
+        BE->>+PP: POST /v2/payments/authorizations/{auth_id}/capture
+        PP->>-BE: Return {capture_id, status: "COMPLETED"}
+        
+        BE->>+DB: Update transaction {status: "CAPTURED", capture_id}
+        DB->>-BE: Transaction Updated
+        
+        %% Webhook CAPTURED
+        PP->>+BE: POST /payments/webhook/paypal<br/>PAYMENT.CAPTURE.COMPLETED
+        BE->>+PP: Verify webhook signature
+        PP->>-BE: Verified
+        BE->>+DB: Update transaction "COMPLETED"
+        DB->>-BE: Transaction Updated
+
+    else Authorization Expires (~29 days)
+        PP->>+BE: POST /payments/webhook/paypal<br/>PAYMENT.AUTHORIZATION.VOIDED
+        BE->>+PP: Verify webhook signature
+        PP->>-BE: Verified
+        BE->>+DB: Update transaction {status: "EXPIRED"}
+        DB->>-BE: Transaction Updated
+        BE->>+DB: Update booking {status: "CANCELLED"}
+        DB->>-BE: Booking Updated
+        BE->>-FE: Push Notification "Booking cancelled"
+    end
+```
+---
