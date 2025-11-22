@@ -156,3 +156,85 @@ flowchart TB
     style AK fill:#FFCDD2
     style AL fill:#FFCDD2
 ```
+
+### **1. Payment Completed Successfully**
+
+**Goal:** To seamlessly finalize a payment via PayPal, confirm the funds have been captured, and update the system to reflect the confirmed booking.
+
+**Precondition:** A user has selected a service, completed the booking form, and has chosen PayPal as their payment method.
+
+**Detailed Flow:**
+
+1. The user clicks the **“Pay with PayPal”** button on the checkout page.
+2. The frontend application sends a request to the backend API endpoint `POST /api/payments/process`, containing the (`bookingId`, `bookingType`, `amount`, `currency`, `customerId`, `provider`, `paymentMethodId`).
+3. The backend server updates the **Booking** status to `PENDING` and creates a new **Transaction** record with a status of `INITIATED`.
+4. The backend authenticates with PayPal by calling `POST /v1/oauth2/token` using the merchant's Client ID and Secret to obtain an `access_token`.
+5. The backend stores the `access_token` in Redis.
+6. Using this `access_token` , the backend calls the PayPal `POST /v2/checkout/orders` API with `intent: "CAPTURE"`, including `amount`, `currency`, and `redirect_urls`.
+7. PayPal responds with a `201 Created` status, a PayPal `order_id`, and an `approval_url`.
+8. The backend saves the `order_id` and `approval_url` to the Transaction record and updates the status to `CREATED`
+9. The backend responds to the frontend with the `order_id` and `approval_url`, and the frontend redirects the user's browser to `approval_url`.
+10. The user logs into PayPal and confirms the payment on PayPal's page.
+11. Upon approval, PayPal redirects the user's browser back to the configured `returnUrl` (e.g., `https://example.com/payment/success`) along with the `order_id`.
+12.**In parallel**, The PayPal sends an asynchronous `CHECKOUT.ORDER.APPROVED` webhook event to the backend’s webhook listener (`POST /api/webhooks/paypal`).
+13. The backend receives the webhook, verifies its cryptographic signature to confirm it’s from PayPal, and updates the **Transaction** status to `APPROVED`.
+14. The backend, using the stored `order_id` (from the Transaction record) and `access token` (from Redis), calls PayPal’s `POST /v2/checkout/orders/{order_id}/capture` endpoint to finalize the payment.
+15. PayPal responds with a `201 Created` and the capture details (including `capture_id`, `status`, and `amount`).
+16. The backend updates the **Transaction** status to `CAPTURED` and the **Booking** status to `CONFIRMED`.
+17. **In parallel**, PayPal also sends an asynchronous `PAYMENT.CAPTURE.COMPLETED` webhook event to the backend’s webhook listener (`POST /api/webhooks/paypal`).
+18. The backend receives the webhook, verifies its cryptographic signature to confirm it’s from PayPal, and updates the **Transaction** status to `COMPLETED`.
+19. The frontend, now on the `returnUrl`, polls the backend or receives a push notification. Upon detecting the `CONFIRMED` status for the Booking & `COMPLETED` status for the Transaction, it displays a booking confirmation page.
+
+**Postcondition:** The Transaction is `COMPLETED` and the Booking is `CONFIRMED`.
+
+**Sequence diagram:**
+
+```mermaid
+sequenceDiagram
+    participant FE as Frontend
+    participant BE as Backend
+    participant PP as PayPal
+    participant DB as Database
+    participant CH as Cache
+    Note over FE: User clicks "Pay with PayPal"
+    %% Phase 1: Payment Request
+    FE->>+BE: POST /api/payments/process<br/>{bookingId: "123", provider: "paypal"}
+    BE->>+DB: Update booking {status: "PENDING"}
+    BE->>+DB: Create transaction {status: "INITIATED", amount: 150 , currency: 'USD'}
+    DB->>-BE: Transaction created , booking updated
+    BE->>+PP: POST /v1/oauth2/token
+    PP->>-BE: Return access_token
+    BE->>+CH: Store access_token
+    BE->>+PP: POST /v2/checkout/orders {intent: "CAPTURE"}
+    PP->>-BE: Return {order_id, approval_url}
+    BE->>+DB: Update transaction {order_id: "order_789", status:"CREATED"}
+    DB->>-BE: Transaction updated
+    BE->>-FE: {order_id, approval_url}
+    %% Phase 2: User Approval
+    FE->>PP: Redirect user to approval_url
+    PP->>PP: User login & approve
+    PP->>FE: Redirect successUrl?token=xxx&order_id=order_789
+    %% Phase 2.5: Webhook-driven Capture
+    PP->>+BE: POST /api/webhooks/paypal<br/>CHECKOUT.ORDER.APPROVED
+    BE->>+PP: Verify webhook signature
+    PP->>-BE: Verified
+    BE->>+DB: update transaction {status: "APPROVED"}
+    DB->>-BE: Transaction updated
+    BE->>+CH: Get access_token
+    CH->>-BE: Return access_token
+    BE->>+PP: POST /v2/checkout/orders/{order_id}/capture
+    PP->>-BE: Return capture details {status: "COMPLETED", capture_id, ...}
+    BE->>+DB: Update transaction {status: "CAPTURED", ...}
+    BE->>+DB: Update booking {status: "CONFIRMED"}
+    DB->>-BE: Updates applied
+    %% Phase 3: Finalize paymen
+    PP->>+BE: POST /api/webhooks/paypal<br/>PAYMENT.CAPTURE.COMPLETED
+    BE->>+PP: Verify webhook signature
+    PP->>-BE: Verified
+    BE->>+DB: update transaction {status: "COMPLETED"}
+    DB->>-BE: Transaction updated
+    
+    %% Optional Notify
+    BE->>FE: Push Notification "Booking confirmed"
+```
+---
