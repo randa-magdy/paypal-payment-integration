@@ -238,3 +238,88 @@ sequenceDiagram
     BE->>FE: Push Notification "Booking confirmed"
 ```
 ---
+
+### **2. Payment Failed (Declined by PayPal)**
+
+**Goal:** To gracefully handle a payment attempt that is declined by PayPal due to insufficient funds, invalid payment method, or other security reasons.
+
+**Precondition:** The user has initiated a payment flow with a PayPal account or payment method that is invalid or cannot cover the charge.
+
+**Detailed Flow:**
+
+1. The user clicks the **“Pay with PayPal”** button on the checkout page.
+2. The frontend application sends a request to the backend API endpoint `POST /api/payments/process`, containing the (`bookingId`, `bookingType`, `amount`, `currency`, `customerId`, `provider`, `paymentMethodId`).
+3. The backend server updates the **Booking** status to `PENDING` and creates a new **Transaction** record with a status of `INITIATED`.
+4. The backend authenticates with PayPal by calling `POST /v1/oauth2/token` using the merchant's Client ID and Secret to obtain an `access_token`.
+5. The backend stores the `access_token` in Redis.
+6. Using this `access_token` , the backend calls the PayPal `POST /v2/checkout/orders` API with `intent: "CAPTURE"`, including `amount`, `currency`, and `redirect_urls`.
+7. PayPal responds with a `201 Created` status, a PayPal `order_id`, and an `approval_url`.
+8. The backend saves the `order_id` and `approval_url` to the Transaction record and updates the status to `CREATED`
+9. The backend responds to the frontend with the `order_id` and `approval_url`, and the frontend redirects the user's browser to `approval_url`.
+10. The user logs into PayPal and confirms the payment on PayPal's page.
+11. Upon approval, PayPal redirects the user's browser back to the configured `returnUrl` (e.g., `https://example.com/payment/success`) along with the `order_id`.
+12.**In parallel**, The PayPal sends an asynchronous `CHECKOUT.ORDER.APPROVED` webhook event to the backend’s webhook listener (`POST /api/webhooks/paypal`).
+13. The backend receives the webhook, verifies its cryptographic signature to confirm it’s from PayPal, and updates the **Transaction** status to `APPROVED`.
+14. The backend, using the stored `order_id` (from the Transaction record) and `access token` (from Redis), calls PayPal’s `POST /v2/checkout/orders/{order_id}/capture` endpoint to finalize the payment.
+15. PayPal's systems decline the transaction (e.g., due to insufficient funds).
+16. PayPal sends a `PAYMENT.CAPTURE.DENIED` webhook event to the backend's webhook listener.
+17. The backend receives the webhook, verifies its cryptographic signature to confirm it’s from PayPal, and updates the **Transaction** status to `FAILED`.
+19. The associated **Booking** status is set to `CANCELLED`.
+18. The frontend, which may be on a generic pending page, fetches the status and displays a "Payment failed. Please try a different method." error.
+
+**Postcondition:** The Transaction is `FAILED` and the Booking is `CANCELLED`.
+
+**Sequence diagram:**
+
+```mermaid
+sequenceDiagram
+    participant FE as Frontend
+    participant BE as Backend
+    participant PP as PayPal
+    participant DB as Database
+    participant CH as Cache
+    Note over FE: User clicks "Pay with PayPal"
+    %% Phase 1: Payment Request
+    FE->>+BE: POST /api/payments/process<br/>{bookingId: "123", provider: "paypal"}
+    BE->>+DB: Update booking {status: "PENDING"}
+    BE->>+DB: Create transaction {status: "INITIATED", amount: 150 , currency: 'USD'}
+    DB->>-BE: Transaction created , booking updated
+    BE->>+PP: POST /v1/oauth2/token
+    PP->>-BE: Return access_token
+    BE->>+CH: Store access_token
+    BE->>+PP: POST /v2/checkout/orders {intent: "CAPTURE"}
+    PP->>-BE: Return {order_id, approval_url}
+    BE->>+DB: Update transaction {order_id: "order_789", status:"CREATED"}
+    DB->>-BE: Transaction updated
+    BE->>-FE: {order_id, approval_url}
+    %% Phase 2: User Approval
+    FE->>PP: Redirect user to approval_url
+    PP->>PP: User login & approve
+    PP->>FE: Redirect successUrl?token=xxx&order_id=order_789
+    %% Phase 2.5: Webhook-driven Capture
+    PP->>+BE: POST /api/webhooks/paypal<br/>PAYMENT.ORDER.APPROVED
+    BE->>+PP: Verify webhook signature
+    PP->>-BE: Verified
+    BE->>+DB: update transaction {status: "APPROVED"}
+    DB->>-BE: Transaction updated
+    BE->>+CH: Get access_token
+    CH->>-BE: Return access_token
+    BE->>+PP: POST /v2/checkout/orders/{order_id}/capture
+    PP->>-BE: Return {status: "DECLINED",...}
+    
+    BE->>+DB: Update transaction {status: "FAILED",...}
+    DB->>-BE: Transaction updated
+    BE->>+DB: Update booking {status: "CANCELLED"}
+    DB->>-BE: Updates applied
+    
+    %% Phase 3: Payment Declined 
+    PP->>+BE: POST /payments/webhook/paypal<br/>PAYMENT.CAPTURE.DENIED
+    BE->>+PP: Verify webhook signature
+    PP->>-BE: Verified
+    BE->>+DB: Confirm status "FAILED"
+    DB->>-BE: Updated
+    
+    %% Optional Notify
+    BE->>FE: Push Notification "Payment Failed"
+```
+---
