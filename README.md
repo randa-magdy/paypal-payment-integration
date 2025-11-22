@@ -81,7 +81,7 @@ The payment integration supports:
 ### **Payment Flow Scenarios :**
 
 ```mermaid
-    ---
+ ---
 config:
   theme: base
 ---
@@ -124,7 +124,9 @@ flowchart TB
     W --> X["Notify User: Booking Confirmed"]
     X --> Y{"Merchant Captures Later?"}
     Y -- Yes --> Z["Backend calls PayPal POST /v2/payments/authorizations/{id}/capture"]
-    Z --> ZV["DB: Transaction=COMPLETED<br>Booking=CONFIRMED"]
+    Z --> Z1["PayPal sends 'PAYMENT.AUTHORIZATION.CAPTURED' webhook"]
+    Z1 --> Z2["Backend verifies Authorization Capture Webhook Signature"]
+    Z2 --> ZV["DB: Transaction=COMPLETED<br>Booking=CONFIRMED"]
     ZV --> AC["Notify User: Booking Confirmed"]
     Y -- No --> AA["PayPal sends 'PAYMENT.AUTHORIZATION.VOIDED' webhook"]
     AA --> AAV["Backend verifies Expired Webhook Signature"]
