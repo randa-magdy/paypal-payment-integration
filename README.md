@@ -360,7 +360,7 @@ webhook listener (`POST /api/webhooks/paypal`).
 19. PayPal sends a `PAYMENT.CAPTURE.COMPLETED` webhook.
 
 * Backend updates **Transaction** to status `COMPLETED`.
-* 19. The frontend, now on the `returnUrl`, polls the backend or receives a push notification. Upon detecting the `CONFIRMED` status for the Booking & `COMPLETED` status for the Transaction, it displays a booking confirmation page.
+* The frontend, now on the `returnUrl`, polls the backend or receives a push notification. Upon detecting the `CONFIRMED` status for the Booking & `COMPLETED` status for the Transaction, it displays a booking confirmation page.
 
 20. **Expiry Handling:** If capture is **not performed within \~29 days**, PayPal voids the authorization and sends a `PAYMENT.AUTHORIZATION.VOIDED` webhook.
 
