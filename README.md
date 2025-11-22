@@ -516,3 +516,68 @@ sequenceDiagram
     BE->>FE: Push Notification "Booking Cancelled"
 ```
 ---
+
+### **5. User Abandons Payment**
+
+**Goal:** To handle incomplete payment flows where the user leaves the PayPal checkout page without taking action.
+
+**Precondition:** A user has initiated a payment but fails to complete it.
+
+**Detailed Flow:**
+
+1.  The user clicks the **“Pay with PayPal”** button on the checkout page.
+2.  The frontend application sends a request to the backend API endpoint `POST /api/payments/process`, containing the booking ID.
+3.  The backend server updates the **Booking** status to `PENDING` and creates a new **Transaction** record with a status of `INITIATED`.
+4.  The backend authenticates with PayPal by calling `POST /v1/oauth2/token` using the merchant's Client ID and Secret to obtain an `access_token`.
+5.  Using this token, the backend calls the PayPal `POST /v2/checkout/orders` API with `intent: "CAPTURE"`, including amount, currency, and `redirect_urls`.
+6.  PayPal responds with a `201 Created` status, a PayPal `order_id`, and an `approval_url`.
+7.  The backend stores this `order_id` and `approval_url` against the Transaction record.
+8.  The backend responds to the frontend with the `approval_url`, and the frontend redirects the user's browser to it.
+9.  The user **abandons the process** by closing the browser tab, navigating away, or remaining idle. **No further interaction occurs.**
+10.  **No webhook is received** from PayPal because the user never approved or denied the payment.
+11.  A scheduled **cron job** on the backend runs periodically (e.g., every 30 minutes). This job searches for all Transaction records that have been in a `CREATED` state for longer than the timeout threshold (e.g., >30 minutes).
+12. For each matching record, the cron job updates the statuses:
+    * The **Transaction** status is set to `ABANDONED`.
+    * The associated **Booking** status is set to `CANCELLED`.
+13. This action may also release any reserved inventory associated with the booking.
+14. If the user returns to the application, the frontend will display a message indicating the payment session timed out.
+
+**Postcondition:** The Transaction is `ABANDONED` and the Booking is `CANCELLED`. System resources are cleaned up.
+
+**Sequence diagram:**
+
+```mermaid
+sequenceDiagram
+    participant FE as Frontend
+    participant BE as Backend
+    participant PP as PayPal
+    participant DB as Database
+    participant CH as Cache
+    Note over FE: User clicks "Pay with PayPal"
+    %% Phase 1: Payment Request
+    FE->>+BE: POST /api/payments/process<br/>{bookingId: "123", provider: "paypal"}
+    BE->>+DB: Update booking {status: "PENDING"}
+    BE->>+DB: Create transaction {status: "INITIATED", amount: 150 , currency: 'USD'}
+    DB->>-BE: Transaction created , booking updated
+    BE->>+PP: POST /v1/oauth2/token
+    PP->>-BE: Return access_token
+    BE->>+CH: Store access_token
+    BE->>+PP: POST /v2/checkout/orders {intent: "CAPTURE"}
+    PP->>-BE: Return {order_id, approval_url}
+    BE->>+DB: Update transaction {order_id: "order_789", status:"CREATED"}
+    DB->>-BE: Transaction updated
+    BE->>-FE: {order_id, approval_url}
+    
+    %% Abandonment
+    FE->>PP: Redirect User to approval_url
+    Note over PP,FE: User closes tab or  never approves payment
+    Note over DB: Transaction remains "CREATED"
+    
+    %% Periodic Cleanup Job
+    BE->>+DB: Find transactions "CREATED" older than N hours
+    DB->>-BE: Pending list
+    BE->>+DB: Update transaction {status: "ABANDONED"}
+    DB->>-BE: Transaction Updated
+    BE->>+DB: Update booking {status: "CANCELLED"}
+    DB->>-BE: Booking Updated
+```
