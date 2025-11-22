@@ -455,3 +455,64 @@ sequenceDiagram
     end
 ```
 ---
+
+### **4. Refund Flow**
+
+**Goal:** To process a full or partial return of funds to the user after a booking has been paid for and confirmed.
+
+**Precondition:** A booking with a status of `CONFIRMED` and a linked `COMPLETED` transaction exists.
+
+**Detailed Flow:**
+
+1.  A user or admin initiates a refund request via the frontend or dashboard.
+2.  The frontend (user, admin, or automated process) calls a backend endpoint such as `POST /api/bookings/{id}/refund`.
+3.  The backend validates the request and creates a **Refund** record with a status of `PENDING`, linked to the original transaction.
+4.  The backend obtains a fresh PayPal OAuth `access_token`.
+5.  The backend calls the PayPal Refund API: `POST /v2/payments/captures/{capture_id}/refund`.
+6.  PayPal processes the refund and sends a `PAYMENT.REFUND.COMPLETED` webhook event upon completion.
+7.  The backend verifies the webhook and updates the system:
+    * The **Refund** record status is updated to `COMPLETED`.
+    * The original **Transaction** status is updated to `REFUNDED` or `PARTIALLY_REFUNDED`.
+    * The **Booking** status is updated to `CANCELLED`.
+8.  The frontend updates to show a confirmation that the refund has been processed & Booking is cancelled.
+
+**Postcondition:** The Transaction is `REFUNDED`, the Booking status is updated to either `CONFIRMED` or `CANCELLED` (depending on the refund scenario), and funds are returned.
+
+**Sequence diagram:**
+
+```mermaid
+sequenceDiagram
+    participant FE as Frontend
+    participant BE as Backend
+    participant PP as PayPal
+    participant DB as Database
+    
+    Note over FE: User/Staff initiates refund
+    
+    FE->>+BE: POST /refunds<br/>{transactionId: "txn_456", amount: 100}
+    BE->>+DB: Fetch transaction {status: "COMPLETED"}
+    DB->>-BE: Found
+    
+    BE->>+PP: POST /v1/oauth2/token
+    PP->>-BE: Return access_token
+    
+    BE->>+PP: POST /v2/payments/captures/{capture_id}/refund
+    PP->>-BE: {refund_id, status: "COMPLETED"}
+    
+    BE->>+DB: Insert refund record {refund_id, status: "COMPLETED"}
+    DB->>-BE: Refund Inserted
+    BE->>+DB: Update transaction {status: "REFUNDED" / "PARTIALLY_REFUNDED"}
+    DB->>-BE: Transaction Updated
+    BE->>-FE: {status: "REFUNDED" / "PARTIALLY_REFUNDED", refundId}
+    
+    %% Webhook
+    PP->>+BE: POST /payments/webhook/paypal<br/>PAYMENT.REFUND.COMPLETED
+    BE->>+PP: Verify webhook
+    PP->>-BE: Verified
+    BE->>+DB: Confirm refund "COMPLETED"
+    DB->>-BE: Confirmed
+    BE->>+DB: Update Booking status {status: "CANCELLED"}
+    DB->>-BE: Booking Updated 
+    BE->>FE: Push Notification "Booking Cancelled"
+```
+---
