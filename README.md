@@ -353,7 +353,7 @@ webhook listener (`POST /api/webhooks/paypal`).
 16. **In parallel**, The PayPal sends an asynchronous `PAYMENT.AUTHORIZATION.CREATED` webhook event to the backend’s webhook listener (`POST /api/webhooks/paypal`).
 17. The backend receives the webhook, verifies its cryptographic signature to confirm it’s from PayPal, reconciles the Transaction and Booking.
 
-18. **Later Capture:** When the merchant decides to capture the funds (e.g., after service delivery), backend calls `POST /v2/payments/authorizations/{authorization_id}/capture`
+18. **Later Capture:** When the merchant decides to capture the funds, backend calls `POST /v2/payments/authorizations/{authorization_id}/capture`
 
 * PayPal captures the held funds and responds with capture details.
 
