@@ -220,6 +220,7 @@ sequenceDiagram
     PP->>-BE: Verified
     BE->>+DB: update transaction {status: "APPROVED"}
     DB->>-BE: Transaction updated
+    BE->>-PP: 200 OK
     BE->>+CH: Get access_token
     CH->>-BE: Return access_token
     BE->>+PP: POST /v2/checkout/orders/{order_id}/capture
@@ -233,6 +234,7 @@ sequenceDiagram
     PP->>-BE: Verified
     BE->>+DB: update transaction {status: "COMPLETED"}
     DB->>-BE: Transaction updated
+    BE->>-PP: 200 OK
     
     %% Optional Notify
     BE->>FE: Push Notification "Booking confirmed"
@@ -302,6 +304,7 @@ sequenceDiagram
     PP->>-BE: Verified
     BE->>+DB: update transaction {status: "APPROVED"}
     DB->>-BE: Transaction updated
+    BE->>-PP: 200 OK
     BE->>+CH: Get access_token
     CH->>-BE: Return access_token
     BE->>+PP: POST /v2/checkout/orders/{order_id}/capture
@@ -318,6 +321,7 @@ sequenceDiagram
     PP->>-BE: Verified
     BE->>+DB: Confirm status "FAILED"
     DB->>-BE: Updated
+    BE->>-PP: 200 OK
     
     %% Optional Notify
     BE->>FE: Push Notification "Payment Failed"
@@ -407,6 +411,7 @@ sequenceDiagram
     PP->>-BE: Verified
     BE->>+DB: update transaction {status: "APPROVED"}
     DB->>-BE: Transaction updated
+    BE->>-PP: 200 OK
     BE->>+CH: Get access_token
     CH->>-BE: Return access_token
     BE->>+PP: POST /v2/checkout/orders/{orderId}/authorize
@@ -424,6 +429,7 @@ sequenceDiagram
     PP->>-BE: Verified
     BE->>+DB: Confirm transaction "AUTHORIZED"
     DB->>-BE: Transaction confirmed
+    BE->>-PP: 200 OK
     BE->>-FE: Push Notification "Booking confirmed"
 
 
@@ -442,6 +448,7 @@ sequenceDiagram
         PP->>-BE: Verified
         BE->>+DB: Update transaction "COMPLETED"
         DB->>-BE: Transaction Updated
+        BE->>-PP: 200 OK
 
     else Authorization Expires (~29 days)
         PP->>+BE: POST /payments/webhook/paypal<br/>PAYMENT.AUTHORIZATION.VOIDED
@@ -451,6 +458,7 @@ sequenceDiagram
         DB->>-BE: Transaction Updated
         BE->>+DB: Update booking {status: "CANCELLED"}
         DB->>-BE: Booking Updated
+        BE->>-PP: 200 OK
         BE->>-FE: Push Notification "Booking cancelled"
     end
 ```
@@ -507,12 +515,13 @@ sequenceDiagram
     
     %% Webhook
     PP->>+BE: POST /payments/webhook/paypal<br/>PAYMENT.REFUND.COMPLETED
-    BE->>+PP: Verify webhook
+    BE->>+PP: Verify webhook signature
     PP->>-BE: Verified
     BE->>+DB: Confirm refund "COMPLETED"
     DB->>-BE: Confirmed
     BE->>+DB: Update Booking status {status: "CANCELLED"}
-    DB->>-BE: Booking Updated 
+    DB->>-BE: Booking Updated
+    BE->>-PP: 200 OK
     BE->>FE: Push Notification "Booking Cancelled"
 ```
 ---
