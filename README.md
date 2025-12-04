@@ -411,7 +411,7 @@ sequenceDiagram
     PP->>-BE: Verified
     BE->>+DB: update transaction {status: "APPROVED"}
     DB->>-BE: Transaction updated
-    BE->>-PP: 200 OK
+    BE->>PP: 200 OK
     BE->>+CH: Get access_token
     CH->>-BE: Return access_token
     BE->>+PP: POST /v2/checkout/orders/{orderId}/authorize
@@ -429,7 +429,7 @@ sequenceDiagram
     PP->>-BE: Verified
     BE->>+DB: Confirm transaction "AUTHORIZED"
     DB->>-BE: Transaction confirmed
-    BE->>-PP: 200 OK
+    BE->>PP: 200 OK
     BE->>-FE: Push Notification "Booking confirmed"
 
 
